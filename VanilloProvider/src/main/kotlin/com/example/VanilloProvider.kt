@@ -11,22 +11,24 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 /* WIP
-search https://api.vanillo.tv/v1/search?query=***
+search https://api.vanillo.tv/v1/search?query=example
 wont https://api.vanillo.tv/v1/playlists/FTWFYu3JS1qpyXEGtdtQ0A/videos
-as series ? https://api.vanillo.tv/v1/profiles/***/videos?offset=0&limit=10
-no need -- video info https://api.vanillo.tv/v1/videos/***
+as series ? https://api.vanillo.tv/v1/profiles/vanillo/videos?offset=0&limit=10
+no need -- video info https://api.vanillo.tv/v1/videos/icecream
 POST "{\"videoId\":\"$keyVideoID\"}" https://api.vanillo.tv/v1/_/watch
 to GET playback links https://api.vanillo.tv/v1/_/watch/manifests?watchToken=$watchToken"
 mainpage https://api.vanillo.tv/v1/videos/recommended?limit=30
-*/
 
+more refs: see sampledata.json.txt
+basic watchable video: basic.sh
+*/
 
 class VanilloProvider : MainAPI() {
     override var name = "Vanillo"
     override var mainUrl = "https://api.vanillo.tv"
-    override val instantLinkLoading = true
+    override val instantLinkLoading = false // bc If link is stored in the "data" string, so links can be instantly loaded
     override val hasQuickSearch = true
-    override val hasChromecastSupport = true // MKV FILES CANT BE PLAYED ON A CHROMECAST
+    override val hasChromecastSupport = false // bc Set false if links require referer
     override val hasDownloadSupport = false // bc HLS and DASH?
 	override val hasMainPage = false // for now, has recommended though
 
@@ -42,8 +44,7 @@ data class VanilloSearchResult(
 @JsonProperty("privacy") val privacy: String?,
 //@JsonProperty("defaultThumbnails") val defaultThumbnails: List<String>?,
 @JsonProperty("status") val status: String?,
-@JsonProperty("publishedAt") val publishedAt: String?,
-@JsonProperty("uploader") val uploader: VanilloUploader?
+@JsonProperty("publishedAt") val publishedAt: String?
     )
 
 data class HomePageList(
@@ -57,8 +58,7 @@ data class HomePageList(
 @JsonProperty("privacy") val privacy: String?,
 //@JsonProperty("defaultThumbnails") val defaultThumbnails: List<String>?,
 @JsonProperty("status") val status: String?,
-@JsonProperty("publishedAt") val publishedAt: String?,
-@JsonProperty("uploader") val uploader: VanilloUploader?
+@JsonProperty("publishedAt") val publishedAt: String?
     )
 	
 data class WatchTokenData(
@@ -84,7 +84,7 @@ data class WatchFinalPlaybackMedia(
         for (i in mapped) {
             val currentUrl = "$mainUrl/v1/_/${i.id}"
             val currentPoster = "${i.thumbnail}"
-            if (i.type == "profile") { // TV-SERIES
+            if (i.type == "profile") { // treat is as TV-SERIES, maybe playlists too? (dirty hack / workaround for video social site imo), seasons could be used for paging
                 returnValue.add(
                     TvSeriesSearchResponse(
                         i.title,
@@ -96,7 +96,7 @@ data class WatchFinalPlaybackMedia(
                         null
                     )
                 )
-            } else if (i.type == "video") { // MOVIE
+            } else if (i.type == "video") { // MOVIE cuz like it's single af
                 returnValue.add(
                     MovieSearchResponse(
                         i.title,
@@ -120,6 +120,21 @@ data class WatchFinalPlaybackMedia(
     ): Boolean {
         // println("loadling link $data")
 
+    // 3 get watch token
+    val watchTokenUrl = URL("https://api.vanillo.tv/v1/_/watch")
+    val watchTokenUrlConnection = watchTokenUrl.openConnection() as HttpURLConnection
+    watchTokenUrlConnection.requestMethod = "POST"
+    watchTokenUrlConnection.setRequestProperty("Content-Type", "application/json; utf-8")
+    watchTokenUrlConnection.doOutput = true
+    val jsonInputString = "{\"videoId\":\"$data\"}"
+    val jsonBytes = jsonInputString.toByteArray(StandardCharsets.UTF_8)
+    watchTokenUrlConnection.outputStream.write(jsonBytes)
+    val watchToken_response = watchTokenUrlConnection.inputStream.bufferedReader().use { it.readText() }
+    val watchToken_json = JSONObject(watchToken_response)
+    val watchToken = watchToken_json.getJSONObject("data").getString("watchToken")
+    println("Watch token: $watchToken")
+
+    //now can actually watch videos!
     val manifests_url = "https://api.vanillo.tv/v1/_/watch/manifests?watchToken=${URLEncoder.encode(watchToken, "UTF-8")}"
     val manifests_response = URL(manifests_url).readText()
     val manifests_json = JSONObject(manifests_response)
@@ -130,13 +145,13 @@ data class WatchFinalPlaybackMedia(
 			
 	        callback.invoke (
             ExtractorLink(
-                name,
-                name,
-                data,
-                "",  // referer not needed
+                name, //source
+                name, //name (video title?)
+                hls_url, //m3u8
+                "https://vanillo.tv", // referrer
                 Qualities.Unknown.value,
-                false,
-                referrer="https://vanillo.tv",
+                headers = mapOf("accept" to "*/*"),
+                true //isM3u8
             )
         )
         return true
